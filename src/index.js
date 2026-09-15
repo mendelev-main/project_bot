@@ -3,7 +3,7 @@ import { Markup, Telegraf } from 'telegraf';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const backendUrl = process.env.VERIFICATION_API_URL?.replace(/\/$/, '');
-const returnUrl = process.env.ORDER_RETURN_URL?.replace(/\/$/, '');
+const fallbackReturnUrl = process.env.ORDER_RETURN_URL?.replace(/\/$/, '');
 const SESSION_TTL_MS = 5 * 60 * 1000;
 
 if (!token) {
@@ -50,33 +50,20 @@ function sessionForUser(userId) {
 
 async function loadVerification(tokenValue) {
   if (!backendUrl) return { token: tokenValue };
-
   const response = await fetch(`${backendUrl}/api/phone-verification/${encodeURIComponent(tokenValue)}`);
   if (!response.ok) return null;
-
   const data = await response.json();
   if (!data || data.status !== 'PENDING') return null;
   return data;
 }
 
 async function confirmVerification(tokenValue, phone, telegramUserId) {
-  if (!backendUrl) {
-    console.log(JSON.stringify({
-      event: 'checkout_phone_verified_local',
-      token: tokenValue,
-      telegramUserId,
-      phone,
-      timestamp: new Date().toISOString(),
-    }));
-    return { ok: true };
-  }
-
+  if (!backendUrl) return { ok: false };
   const response = await fetch(`${backendUrl}/api/phone-verification/${encodeURIComponent(tokenValue)}/confirm`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ phone, telegramUserId }),
   });
-
   if (!response.ok) return { ok: false };
   return response.json();
 }
@@ -96,37 +83,31 @@ async function startCheckoutVerification(ctx, tokenValue) {
     return;
   }
 
+  const backendExpiry = Date.parse(verification.expiresAt || '');
+  const expiresAt = Number.isFinite(backendExpiry) ? backendExpiry : Date.now() + SESSION_TTL_MS;
+  if (expiresAt <= Date.now()) {
+    await ctx.reply('⌛ Время подтверждения истекло. Вернитесь к заказу и попробуйте снова.');
+    return;
+  }
+
   sessions.set(ctx.from.id, {
     token: tokenValue,
     expectedPhone: normalizePhone(verification.phone),
-    expiresAt: Date.now() + SESSION_TTL_MS,
+    expiresAt,
   });
 
-  await ctx.reply(
-    'Подтвердите номер телефона.\n\nСсылка действует 5 минут.',
-    contactKeyboard(),
-  );
+  await ctx.reply('Подтвердите номер телефона.\n\nСсылка действует 5 минут.', contactKeyboard());
 }
 
 bot.start(async (ctx) => {
   const tokenValue = getStartToken(ctx);
-  if (tokenValue) {
-    await startCheckoutVerification(ctx, tokenValue);
-    return;
-  }
-
-  await ctx.reply(
-    'Здравствуйте! 👋\n\nПодтвердить номер можно при оформлении заказа на сайте.',
-    Markup.removeKeyboard(),
-  );
+  if (tokenValue) return startCheckoutVerification(ctx, tokenValue);
+  await ctx.reply('Здравствуйте! 👋\n\nПодтвердить номер можно при оформлении заказа на сайте.', Markup.removeKeyboard());
 });
 
 bot.help(async (ctx) => {
   const session = sessionForUser(ctx.from.id);
-  if (session) {
-    await ctx.reply('Нажмите «📱 Подтвердить номер».', contactKeyboard());
-    return;
-  }
+  if (session) return ctx.reply('Нажмите «📱 Подтвердить номер».', contactKeyboard());
   await ctx.reply('Откройте бота через кнопку подтверждения номера на сайте.');
 });
 
@@ -139,7 +120,6 @@ bot.on('contact', async (ctx) => {
     await ctx.reply('⌛ Время подтверждения истекло. Вернитесь к заказу и попробуйте снова.', Markup.removeKeyboard());
     return;
   }
-
   if (!contact.user_id || contact.user_id !== senderId) {
     await ctx.reply('❌ Можно подтвердить только свой номер.', contactKeyboard());
     return;
@@ -150,7 +130,6 @@ bot.on('contact', async (ctx) => {
     await ctx.reply('❌ Не удалось проверить номер. Попробуйте ещё раз.', contactKeyboard());
     return;
   }
-
   if (session.expectedPhone && phone !== session.expectedPhone) {
     await ctx.reply('❌ Номер Telegram не совпадает с номером в заказе.', contactKeyboard());
     return;
@@ -166,59 +145,41 @@ bot.on('contact', async (ctx) => {
   }
 
   if (!result?.ok) {
-    await ctx.reply('⌛ Подтверждение недействительно или уже завершено.', Markup.removeKeyboard());
     sessions.delete(senderId);
+    await ctx.reply('⌛ Подтверждение недействительно или уже завершено.', Markup.removeKeyboard());
     return;
   }
 
   sessions.delete(senderId);
-
+  const returnUrl = result.returnUrl || fallbackReturnUrl;
   const keyboard = returnUrl
-    ? Markup.inlineKeyboard([[Markup.button.url('Вернуться к заказу', `${returnUrl}?verification=${encodeURIComponent(session.token)}`)]])
+    ? Markup.inlineKeyboard([[Markup.button.url('Вернуться к заказу', `${returnUrl}${returnUrl.includes('?') ? '&' : '?'}verification=${encodeURIComponent(session.token)}`)]])
     : undefined;
 
-  await ctx.reply(
-    '✅ Номер подтверждён.',
-    { ...Markup.removeKeyboard(), ...(keyboard || {}) },
-  );
+  await ctx.reply('✅ Номер подтверждён.', { ...Markup.removeKeyboard(), ...(keyboard || {}) });
 });
 
 bot.on('text', async (ctx) => {
   if (ctx.message?.text?.startsWith('/')) return;
   const session = sessionForUser(ctx.from.id);
-  if (session) {
-    await ctx.reply('Подтвердите номер кнопкой ниже.', contactKeyboard());
-    return;
-  }
+  if (session) return ctx.reply('Подтвердите номер кнопкой ниже.', contactKeyboard());
   await ctx.reply('Подтвердить номер можно при оформлении заказа на сайте.');
 });
 
 bot.catch((error, ctx) => {
-  console.error('Bot error', {
-    updateId: ctx.update?.update_id,
-    error: error instanceof Error ? error.message : String(error),
-  });
+  console.error('Bot error', { updateId: ctx.update?.update_id, error: error instanceof Error ? error.message : String(error) });
 });
 
 const cleanupTimer = setInterval(() => {
   const now = Date.now();
-  for (const [userId, session] of sessions) {
-    if (now > session.expiresAt) sessions.delete(userId);
-  }
+  for (const [userId, session] of sessions) if (now > session.expiresAt) sessions.delete(userId);
 }, 60_000);
 cleanupTimer.unref();
 
-const shutdown = (signal) => {
-  console.log(`Received ${signal}, stopping bot...`);
-  bot.stop(signal);
-};
-
+const shutdown = signal => { console.log(`Received ${signal}, stopping bot...`); bot.stop(signal); };
 process.once('SIGINT', () => shutdown('SIGINT'));
 process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 bot.launch({ dropPendingUpdates: false })
   .then(() => console.log('Project bot started'))
-  .catch((error) => {
-    console.error('Failed to start bot', error);
-    process.exit(1);
-  });
+  .catch(error => { console.error('Failed to start bot', error); process.exit(1); });
