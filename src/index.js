@@ -9,116 +9,192 @@ if (!token) {
 }
 
 const bot = new Telegraf(token);
-
-const mainKeyboard = Markup.keyboard([
-  ['📱 Подтвердить номер'],
-  ['ℹ️ Помощь'],
-]).resize();
-
-const contactKeyboard = Markup.keyboard([
-  [Markup.button.contactRequest('📱 Поделиться номером телефона')],
-  ['⬅️ Назад'],
-]).resize().oneTime();
+const uiMessages = new Map();
 
 function normalizePhone(phone) {
   if (!phone) return null;
-
   let digits = String(phone).replace(/\D/g, '');
-
-  // Convenient normalization for Belarusian numbers entered/received locally.
-  if (digits.length === 11 && digits.startsWith('8')) {
-    digits = `375${digits.slice(1)}`;
-  }
-
-  if (digits.length === 9) {
-    digits = `375${digits}`;
-  }
-
+  if (digits.length === 11 && digits.startsWith('8')) digits = `375${digits.slice(1)}`;
+  if (digits.length === 9) digits = `375${digits}`;
   if (digits.length < 10 || digits.length > 15) return null;
-
   return `+${digits}`;
 }
 
-async function showWelcome(ctx) {
-  const firstName = ctx.from?.first_name;
-  const greeting = firstName ? `Привет, ${firstName}!` : 'Привет!';
+function chatKey(ctx) {
+  return ctx.chat?.id;
+}
 
-  await ctx.reply(
-    `${greeting}\n\nЭто бот «Проект». Здесь можно подтвердить номер телефона.`,
-    mainKeyboard,
+async function safeDelete(ctx, messageId) {
+  if (!messageId) return;
+  try {
+    await ctx.telegram.deleteMessage(ctx.chat.id, messageId);
+  } catch {
+    // A message may already be gone or may be too old to delete.
+  }
+}
+
+async function cleanupPreviousUi(ctx) {
+  const key = chatKey(ctx);
+  if (!key) return;
+  const previous = uiMessages.get(key);
+  if (previous) await safeDelete(ctx, previous);
+}
+
+async function sendUi(ctx, text, extra = {}) {
+  await cleanupPreviousUi(ctx);
+  const message = await ctx.reply(text, extra);
+  uiMessages.set(chatKey(ctx), message.message_id);
+  return message;
+}
+
+async function typing(ctx, delay = 350) {
+  try {
+    await ctx.sendChatAction('typing');
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  } catch {
+    // Typing status is cosmetic and must never break the flow.
+  }
+}
+
+const mainMenu = () => Markup.inlineKeyboard([
+  [Markup.button.callback('📱 Подтвердить номер', 'verify_phone')],
+  [Markup.button.callback('ℹ️ Помощь', 'help')],
+]);
+
+async function showWelcome(ctx) {
+  await typing(ctx);
+  const firstName = ctx.from?.first_name;
+  const greeting = firstName ? `Привет, ${firstName}.` : 'Привет.';
+  await sendUi(
+    ctx,
+    `◉ ПРОЕКТ\n\n${greeting}\n\nВыберите действие:`,
+    mainMenu(),
   );
 }
 
-bot.start(showWelcome);
+bot.start(async (ctx) => {
+  // Remove the old persistent reply keyboard from previous bot versions.
+  await ctx.reply('Обновляю интерфейс…', Markup.removeKeyboard())
+    .then((message) => safeDelete(ctx, message.message_id));
+  await safeDelete(ctx, ctx.message?.message_id);
+  await showWelcome(ctx);
+});
 
 bot.help(async (ctx) => {
-  await ctx.reply(
-    'Нажмите «Подтвердить номер», затем поделитесь своим номером через специальную кнопку Telegram. Обычное текстовое сообщение с номером не считается подтверждением.',
-    mainKeyboard,
+  await safeDelete(ctx, ctx.message?.message_id);
+  await typing(ctx);
+  await sendUi(
+    ctx,
+    'ℹ️ ПОДТВЕРЖДЕНИЕ НОМЕРА\n\nTelegram передаст номер только после вашего разрешения. Для подтверждения принимается только ваш собственный контакт.',
+    Markup.inlineKeyboard([[Markup.button.callback('‹ Назад', 'home')]]),
   );
 });
 
 bot.command('status', async (ctx) => {
-  await ctx.reply('✅ Бот работает.', mainKeyboard);
-});
-
-bot.hears('ℹ️ Помощь', async (ctx) => {
-  await ctx.reply(
-    'Для подтверждения номера нажмите «Подтвердить номер» и затем «Поделиться номером телефона». Telegram попросит ваше разрешение перед отправкой контакта.',
-    mainKeyboard,
+  await safeDelete(ctx, ctx.message?.message_id);
+  await typing(ctx, 200);
+  await sendUi(
+    ctx,
+    '● ONLINE\n\nСистема работает нормально.',
+    Markup.inlineKeyboard([[Markup.button.callback('‹ Назад', 'home')]]),
   );
 });
 
-bot.hears('📱 Подтвердить номер', async (ctx) => {
-  await ctx.reply(
-    'Нажмите кнопку ниже, чтобы передать номер телефона, привязанный к вашему Telegram-аккаунту.',
+bot.action('home', async (ctx) => {
+  await ctx.answerCbQuery();
+  await showWelcome(ctx);
+});
+
+bot.action('help', async (ctx) => {
+  await ctx.answerCbQuery();
+  await typing(ctx);
+  await sendUi(
+    ctx,
+    'ℹ️ ПОДТВЕРЖДЕНИЕ НОМЕРА\n\nНажмите «Продолжить», затем разрешите Telegram отправить номер телефона, привязанный к вашему аккаунту.\n\nОбычный номер, отправленный текстом, не считается подтверждением.',
+    Markup.inlineKeyboard([
+      [Markup.button.callback('Продолжить →', 'verify_phone')],
+      [Markup.button.callback('‹ Назад', 'home')],
+    ]),
+  );
+});
+
+bot.action('verify_phone', async (ctx) => {
+  await ctx.answerCbQuery();
+  await typing(ctx);
+
+  // Telegram can request a contact only through a reply-keyboard button.
+  // Make it one-time and immediately remove it after the contact arrives.
+  const contactKeyboard = Markup.keyboard([
+    [Markup.button.contactRequest('Поделиться номером')],
+  ]).resize().oneTime();
+
+  await sendUi(
+    ctx,
+    '◌ ПОДТВЕРЖДЕНИЕ\n\nНа один шаг внизу появится системная кнопка Telegram. Нажмите её и подтвердите передачу своего номера.',
     contactKeyboard,
   );
-});
-
-bot.hears('⬅️ Назад', async (ctx) => {
-  await ctx.reply('Главное меню', mainKeyboard);
 });
 
 bot.on('contact', async (ctx) => {
   const contact = ctx.message.contact;
   const senderId = ctx.from?.id;
 
-  // Telegram includes user_id for a contact that represents a Telegram user.
-  // For verification we accept only the sender's own contact.
+  await typing(ctx, 450);
+
+  // Hide the temporary contact keyboard immediately.
+  const cleanup = await ctx.reply('Проверяю…', Markup.removeKeyboard());
+  await safeDelete(ctx, cleanup.message_id);
+  await safeDelete(ctx, ctx.message?.message_id);
+
   if (!contact.user_id || contact.user_id !== senderId) {
-    await ctx.reply(
-      '❌ Можно подтвердить только свой номер телефона. Используйте кнопку «Поделиться номером телефона».',
-      mainKeyboard,
+    await sendUi(
+      ctx,
+      '⚠️ НЕ ПОДТВЕРЖДЕНО\n\nМожно подтвердить только номер, принадлежащий вашему Telegram-аккаунту.',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('Повторить', 'verify_phone')],
+        [Markup.button.callback('‹ В меню', 'home')],
+      ]),
     );
     return;
   }
 
   const phone = normalizePhone(contact.phone_number);
-
   if (!phone) {
-    await ctx.reply(
-      '❌ Не удалось распознать номер телефона. Попробуйте ещё раз.',
-      mainKeyboard,
+    await sendUi(
+      ctx,
+      '⚠️ ОШИБКА\n\nНе удалось корректно распознать номер телефона.',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('Повторить', 'verify_phone')],
+        [Markup.button.callback('‹ В меню', 'home')],
+      ]),
     );
     return;
   }
 
-  console.log(
-    JSON.stringify({
-      event: 'phone_verified',
-      telegramUserId: senderId,
-      phone,
-      timestamp: new Date().toISOString(),
-    }),
-  );
+  console.log(JSON.stringify({
+    event: 'phone_verified',
+    telegramUserId: senderId,
+    phone,
+    timestamp: new Date().toISOString(),
+  }));
 
-  await ctx.reply(
-    `✅ Номер подтверждён\n\n${phone}`,
-    Markup.removeKeyboard(),
+  await sendUi(
+    ctx,
+    `✓ ПОДТВЕРЖДЕНО\n\n${phone}\n\nНомер успешно подтверждён.`,
+    Markup.inlineKeyboard([[Markup.button.callback('Готово', 'home')]]),
   );
+});
 
-  await ctx.reply('Готово. Вы можете продолжить работу с ботом.', mainKeyboard);
+bot.on('text', async (ctx) => {
+  // Keep the private bot chat clean: commands are handled above, other text is removed.
+  if (ctx.message?.text?.startsWith('/')) return;
+  await safeDelete(ctx, ctx.message?.message_id);
+  await typing(ctx, 200);
+  await sendUi(
+    ctx,
+    'Введите действие кнопками ниже.',
+    mainMenu(),
+  );
 });
 
 bot.catch((error, ctx) => {
