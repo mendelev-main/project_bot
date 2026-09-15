@@ -1,8 +1,8 @@
 {
   "name": "project-telegram-bot",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Telegram bot and Mini App for Project",
+  "description": "Simple Telegram phone verification bot for Project",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
@@ -14,7 +14,6 @@
   },
   "dependencies": {
     "dotenv": "^16.4.7",
-    "express": "^5.1.0",
     "telegraf": "^4.16.3"
   }
 }
