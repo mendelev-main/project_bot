@@ -1,12 +1,7 @@
 import 'dotenv/config';
-import express from 'express';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
 import { Markup, Telegraf } from 'telegraf';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
-const port = Number(process.env.PORT || 3000);
-const publicUrl = process.env.PUBLIC_URL?.replace(/\/$/, '');
 
 if (!token) {
   console.error('TELEGRAM_BOT_TOKEN is not configured');
@@ -14,13 +9,6 @@ if (!token) {
 }
 
 const bot = new Telegraf(token);
-const uiMessages = new Map();
-const app = express();
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-app.use(express.static(path.join(__dirname, '..', 'public')));
-app.get('/health', (_req, res) => res.json({ ok: true }));
-app.listen(port, '0.0.0.0', () => console.log(`Web server listening on ${port}`));
 
 function normalizePhone(phone) {
   if (!phone) return null;
@@ -31,98 +19,35 @@ function normalizePhone(phone) {
   return `+${digits}`;
 }
 
-async function safeDelete(ctx, messageId) {
-  if (!messageId) return;
-  try { await ctx.telegram.deleteMessage(ctx.chat.id, messageId); } catch {}
-}
+const contactKeyboard = () => Markup.keyboard([
+  [Markup.button.contactRequest('📱 Подтвердить номер')],
+]).resize().oneTime();
 
-async function replaceUi(ctx, text, extra = {}) {
-  const key = ctx.chat?.id;
-  const previous = key ? uiMessages.get(key) : null;
-  if (previous) await safeDelete(ctx, previous);
-  const message = await ctx.reply(text, extra);
-  if (key) uiMessages.set(key, message.message_id);
-  return message;
-}
-
-function homeKeyboard() {
-  const rows = [];
-  if (publicUrl) {
-    rows.push([Markup.button.webApp('📱 Подтвердить номер', `${publicUrl}/verify.html`)]);
-  } else {
-    rows.push([Markup.button.callback('📱 Подтвердить номер', 'miniapp_not_ready')]);
-  }
-  rows.push([Markup.button.callback('ℹ️ О боте', 'about')]);
-  return Markup.inlineKeyboard(rows);
-}
-
-async function showHome(ctx) {
-  const firstName = ctx.from?.first_name;
-  const hello = firstName ? `Здравствуйте, ${firstName}!` : 'Здравствуйте!';
-  await replaceUi(
-    ctx,
-    `◉ ПРОЕКТ\n\n${hello}\n\nСервисы Проекта в Telegram.`,
-    homeKeyboard(),
+async function showStart(ctx) {
+  await ctx.reply(
+    'Здравствуйте! 👋\n\nПодтвердите номер телефона, привязанный к вашему Telegram.',
+    contactKeyboard(),
   );
 }
 
-bot.start(showHome);
+bot.start(showStart);
 
 bot.help(async (ctx) => {
-  await replaceUi(
-    ctx,
-    'ℹ️ О БОТЕ\n\nБот «Проект» предоставляет быстрый доступ к сервисам Проекта прямо в Telegram.',
-    Markup.inlineKeyboard([[Markup.button.callback('‹ Назад', 'home')]]),
-  );
+  await ctx.reply('Нажмите «📱 Подтвердить номер» и разрешите Telegram передать ваш номер.', contactKeyboard());
 });
 
-bot.command('status', async (ctx) => {
-  await replaceUi(
-    ctx,
-    '● ONLINE\n\nВсе системы работают.',
-    Markup.inlineKeyboard([[Markup.button.callback('‹ Назад', 'home')]]),
-  );
-});
-
-bot.action('home', async (ctx) => {
-  await ctx.answerCbQuery();
-  await showHome(ctx);
-});
-
-bot.action('about', async (ctx) => {
-  await ctx.answerCbQuery();
-  await replaceUi(
-    ctx,
-    'ℹ️ О БОТЕ\n\nБот «Проект» предоставляет быстрый доступ к сервисам Проекта прямо в Telegram.',
-    Markup.inlineKeyboard([[Markup.button.callback('‹ Назад', 'home')]]),
-  );
-});
-
-bot.action('miniapp_not_ready', async (ctx) => {
-  await ctx.answerCbQuery('Сервис подтверждения настраивается.', { show_alert: true });
-});
-
-// requestContact() in the Mini App makes Telegram send the user's own contact to this bot.
 bot.on('contact', async (ctx) => {
   const contact = ctx.message.contact;
   const senderId = ctx.from?.id;
 
   if (!contact.user_id || contact.user_id !== senderId) {
-    await replaceUi(
-      ctx,
-      '⚠️ Номер не подтверждён.\n\nМожно подтвердить только свой номер телефона.',
-      Markup.inlineKeyboard([[Markup.button.callback('‹ В меню', 'home')]]),
-    );
+    await ctx.reply('❌ Можно подтвердить только свой номер.', contactKeyboard());
     return;
   }
 
   const phone = normalizePhone(contact.phone_number);
   if (!phone) {
-    await replaceUi(
-      ctx,
-      '⚠️ Не удалось распознать номер телефона.',
-      Markup.inlineKeyboard([[Markup.button.callback('‹ В меню', 'home')]]),
-    );
+    await ctx.reply('❌ Не удалось проверить номер. Попробуйте ещё раз.', contactKeyboard());
     return;
   }
 
@@ -133,16 +58,15 @@ bot.on('contact', async (ctx) => {
     timestamp: new Date().toISOString(),
   }));
 
-  await replaceUi(
-    ctx,
-    `✅ Номер подтверждён\n\n${phone}`,
-    Markup.inlineKeyboard([[Markup.button.callback('Готово', 'home')]]),
+  await ctx.reply(
+    `✅ Номер подтверждён\n${phone}`,
+    Markup.removeKeyboard(),
   );
 });
 
 bot.on('text', async (ctx) => {
   if (ctx.message?.text?.startsWith('/')) return;
-  await ctx.reply('Используйте меню бота.', homeKeyboard());
+  await ctx.reply('Для продолжения подтвердите свой номер.', contactKeyboard());
 });
 
 bot.catch((error, ctx) => {
