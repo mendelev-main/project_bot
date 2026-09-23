@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { registerOwnerHandlers } from './owner.js';
 import { Markup, Telegraf } from 'telegraf';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -13,6 +14,7 @@ if (!token) {
 
 const bot = new Telegraf(token);
 const sessions = new Map();
+const startOwner = registerOwnerHandlers(bot,{backendUrl:process.env.OWNER_API_URL||backendUrl,secret:process.env.OWNER_BOT_SHARED_SECRET});
 
 function normalizePhone(phone) {
   if (!phone) return null;
@@ -61,7 +63,7 @@ async function confirmVerification(tokenValue, phone, telegramUserId) {
   if (!backendUrl) return { ok: false };
   const response = await fetch(`${backendUrl}/api/phone-verification/${encodeURIComponent(tokenValue)}/confirm`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(process.env.OWNER_BOT_SHARED_SECRET ? { 'X-Owner-Bot-Secret': process.env.OWNER_BOT_SHARED_SECRET } : {}) },
     body: JSON.stringify({ phone, telegramUserId }),
   });
   if (!response.ok) return { ok: false };
@@ -100,6 +102,7 @@ async function startCheckoutVerification(ctx, tokenValue) {
 }
 
 bot.start(async (ctx) => {
+  if(await startOwner(ctx))return;
   const tokenValue = getStartToken(ctx);
   if (tokenValue) return startCheckoutVerification(ctx, tokenValue);
   await ctx.reply('Здравствуйте! 👋\n\nПодтвердить номер можно при оформлении заказа на сайте.', Markup.removeKeyboard());
