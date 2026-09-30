@@ -4,7 +4,6 @@ import { Markup, Telegraf } from 'telegraf';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const backendUrl = process.env.VERIFICATION_API_URL?.replace(/\/$/, '');
-const fallbackReturnUrl = process.env.ORDER_RETURN_URL?.replace(/\/$/, '');
 const SESSION_TTL_MS = 5 * 60 * 1000;
 
 if (!token) {
@@ -154,12 +153,10 @@ bot.on('contact', async (ctx) => {
   }
 
   sessions.delete(senderId);
-  const returnUrl = result.returnUrl || fallbackReturnUrl;
-  const keyboard = returnUrl
-    ? Markup.inlineKeyboard([[Markup.button.url('Вернуться к заказу', `${returnUrl}${returnUrl.includes('?') ? '&' : '?'}verification=${encodeURIComponent(session.token)}`)]])
-    : undefined;
-
-  await ctx.reply('✅ Номер подтверждён.', { ...Markup.removeKeyboard(), ...(keyboard || {}) });
+  await ctx.reply(
+    '✅ Номер подтверждён.\n\nЗаказ отправлен в заведение. Об изменениях статуса заказа я сообщу вам здесь.',
+    Markup.removeKeyboard(),
+  );
 });
 
 bot.on('text', async (ctx) => {
