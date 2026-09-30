@@ -153,10 +153,7 @@ bot.on('contact', async (ctx) => {
   }
 
   sessions.delete(senderId);
-  await ctx.reply(
-    '✅ Номер подтверждён.\n\nЗаказ отправлен в заведение. Об изменениях статуса заказа я сообщу вам здесь.',
-    Markup.removeKeyboard(),
-  );
+  await ctx.reply('✅ Номер подтверждён.', Markup.removeKeyboard());
 });
 
 bot.on('text', async (ctx) => {
