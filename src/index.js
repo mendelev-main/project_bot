@@ -104,6 +104,7 @@ bot.start(async (ctx) => {
   if(await startOwner(ctx))return;
   const tokenValue = getStartToken(ctx);
   if (tokenValue) return startCheckoutVerification(ctx, tokenValue);
+  if(await startOwner.showMenu(ctx))return;
   await ctx.reply('Здравствуйте! 👋\n\nПодтвердить номер можно при оформлении заказа на сайте.', Markup.removeKeyboard());
 });
 
