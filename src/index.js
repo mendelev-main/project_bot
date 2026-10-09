@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { verificationPayload } from './verification-payload.js';
 import { registerOwnerHandlers } from './owner.js';
 import { Markup, Telegraf } from 'telegraf';
 
@@ -58,12 +59,12 @@ async function loadVerification(tokenValue) {
   return data;
 }
 
-async function confirmVerification(tokenValue, phone, telegramUserId) {
+async function confirmVerification(tokenValue, phone, telegramUserId, telegramUsername) {
   if (!backendUrl) return { ok: false };
   const response = await fetch(`${backendUrl}/api/phone-verification/${encodeURIComponent(tokenValue)}/confirm`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...(process.env.OWNER_BOT_SHARED_SECRET ? { 'X-Owner-Bot-Secret': process.env.OWNER_BOT_SHARED_SECRET } : {}) },
-    body: JSON.stringify({ phone, telegramUserId }),
+    body: JSON.stringify(verificationPayload(phone, telegramUserId, telegramUsername)),
   });
   if (!response.ok) return { ok: false };
   return response.json();
@@ -140,7 +141,7 @@ bot.on('contact', async (ctx) => {
 
   let result;
   try {
-    result = await confirmVerification(session.token, phone, senderId);
+    result = await confirmVerification(session.token, phone, senderId, ctx.from?.username);
   } catch (error) {
     console.error('Verification confirmation failed', error);
     await ctx.reply('⚠️ Не удалось завершить подтверждение. Попробуйте ещё раз.', contactKeyboard());
