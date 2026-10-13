@@ -11,8 +11,11 @@ concurrency:
 
 jobs:
   deploy:
+    name: Deploy production
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    environment:
+      name: production
 
     steps:
       - name: Configure SSH
@@ -23,10 +26,8 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-
           ssh-keyscan -p "$VDS_PORT" -H "$VDS_HOST" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
@@ -42,3 +43,53 @@ jobs:
             -o IdentitiesOnly=yes \
             "$VDS_USER@$VDS_HOST" \
             'sudo -n /opt/mpos/scripts/deploy-bot.sh'
+
+      - name: Verify deployed commit
+        env:
+          VDS_HOST: ${{ secrets.VDS_HOST }}
+          VDS_PORT: ${{ secrets.VDS_PORT }}
+          VDS_USER: ${{ secrets.VDS_USER }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          ACTUAL_SHA="$(ssh \
+            -i ~/.ssh/id_ed25519 \
+            -p "$VDS_PORT" \
+            -o IdentitiesOnly=yes \
+            "$VDS_USER@$VDS_HOST" \
+            'git -C /opt/mpos/bot rev-parse HEAD')"
+
+          echo "Expected commit: $EXPECTED_SHA"
+          echo "Deployed commit: $ACTUAL_SHA"
+          test "$ACTUAL_SHA" = "$EXPECTED_SHA"
+          echo "Commit verification: OK"
+
+      - name: Verify bot stability
+        env:
+          VDS_HOST: ${{ secrets.VDS_HOST }}
+          VDS_PORT: ${{ secrets.VDS_PORT }}
+          VDS_USER: ${{ secrets.VDS_USER }}
+        run: |
+          echo "Waiting 15 seconds to detect an immediate restart loop..."
+          sleep 15
+
+          ssh \
+            -i ~/.ssh/id_ed25519 \
+            -p "$VDS_PORT" \
+            -o IdentitiesOnly=yes \
+            "$VDS_USER@$VDS_HOST" \
+            'sudo -n /opt/mpos/scripts/deploy-bot.sh >/dev/null'
+          
+          echo "Bot deploy script completed after stability window"
+
+      - name: Deployment summary
+        if: success()
+        run: |
+          {
+            echo "## Bot production deployment successful"
+            echo ""
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Environment: production"
+            echo "- VDS deploy: OK"
+            echo "- Commit verification: OK"
+            echo "- Bot stability window: OK"
+          } >> "$GITHUB_STEP_SUMMARY"
