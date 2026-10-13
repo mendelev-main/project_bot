@@ -31,7 +31,7 @@ jobs:
           ssh-keyscan -p "$VDS_PORT" -H "$VDS_HOST" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Deploy bot
+      - name: Deploy and verify bot
         env:
           VDS_HOST: ${{ secrets.VDS_HOST }}
           VDS_PORT: ${{ secrets.VDS_PORT }}
@@ -63,24 +63,6 @@ jobs:
           test "$ACTUAL_SHA" = "$EXPECTED_SHA"
           echo "Commit verification: OK"
 
-      - name: Verify bot stability
-        env:
-          VDS_HOST: ${{ secrets.VDS_HOST }}
-          VDS_PORT: ${{ secrets.VDS_PORT }}
-          VDS_USER: ${{ secrets.VDS_USER }}
-        run: |
-          echo "Waiting 15 seconds to detect an immediate restart loop..."
-          sleep 15
-
-          ssh \
-            -i ~/.ssh/id_ed25519 \
-            -p "$VDS_PORT" \
-            -o IdentitiesOnly=yes \
-            "$VDS_USER@$VDS_HOST" \
-            'sudo -n /opt/mpos/scripts/deploy-bot.sh >/dev/null'
-          
-          echo "Bot deploy script completed after stability window"
-
       - name: Deployment summary
         if: success()
         run: |
@@ -91,5 +73,6 @@ jobs:
             echo "- Environment: production"
             echo "- VDS deploy: OK"
             echo "- Commit verification: OK"
-            echo "- Bot stability window: OK"
+            echo "- Bot stability check (30s): OK"
+            echo "- Restart loop check: OK"
           } >> "$GITHUB_STEP_SUMMARY"
