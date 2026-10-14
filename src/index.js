@@ -14,7 +14,18 @@ if (!token) {
 
 const bot = new Telegraf(token);
 const sessions = new Map();
+const ORDER_URL = 'https://project-dubrovno.store/';
 const startOwner = registerOwnerHandlers(bot,{backendUrl:process.env.OWNER_API_URL||backendUrl,secret:process.env.OWNER_BOT_SHARED_SECRET});
+
+async function configureMenuButton() {
+  await bot.telegram.setChatMenuButton({
+    menuButton: {
+      type: 'web_app',
+      text: 'Новый заказ',
+      web_app: { url: ORDER_URL },
+    },
+  });
+}
 
 function normalizePhone(phone) {
   if (!phone) return null;
@@ -180,5 +191,8 @@ process.once('SIGINT', () => shutdown('SIGINT'));
 process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 bot.launch({ dropPendingUpdates: false })
-  .then(() => console.log('Project bot started'))
+  .then(async () => {
+    await configureMenuButton();
+    console.log('Project bot started');
+  })
   .catch(error => { console.error('Failed to start bot', error); process.exit(1); });
