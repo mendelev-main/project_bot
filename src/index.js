@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { verificationPayload } from './verification-payload.js';
+import { normalizeBelarusPhone as normalizePhone, accountReturnUrl } from './account-login.js';
 import { registerOwnerHandlers } from './owner.js';
 import { Markup, Telegraf } from 'telegraf';
 
@@ -25,15 +26,6 @@ async function configureMenuButton() {
       web_app: { url: ORDER_URL },
     },
   });
-}
-
-function normalizePhone(phone) {
-  if (!phone) return null;
-  let digits = String(phone).replace(/\D/g, '');
-  if (digits.length === 11 && digits.startsWith('8')) digits = `375${digits.slice(1)}`;
-  if (digits.length === 9) digits = `375${digits}`;
-  if (digits.length < 10 || digits.length > 15) return null;
-  return `+${digits}`;
 }
 
 function cleanToken(value) {
@@ -99,7 +91,7 @@ async function startCheckoutVerification(ctx, tokenValue) {
   const backendExpiry = Date.parse(verification.expiresAt || '');
   const expiresAt = Number.isFinite(backendExpiry) ? backendExpiry : Date.now() + SESSION_TTL_MS;
   if (expiresAt <= Date.now()) {
-    await ctx.reply('⌛ Время подтверждения истекло. Вернитесь к заказу и попробуйте снова.');
+    await ctx.reply('⌛ Время подтверждения истекло. Вернитесь на сайт и попробуйте снова.');
     return;
   }
 
@@ -117,7 +109,7 @@ bot.start(async (ctx) => {
   const tokenValue = getStartToken(ctx);
   if (tokenValue) return startCheckoutVerification(ctx, tokenValue);
   if(await startOwner.showMenu(ctx))return;
-  await ctx.reply('Здравствуйте! 👋\n\nПодтвердить номер можно при оформлении заказа на сайте.', Markup.removeKeyboard());
+  await ctx.reply('Здравствуйте! 👋\n\nВойти в личный кабинет или подтвердить заказ можно на сайте.', Markup.removeKeyboard());
 });
 
 bot.help(async (ctx) => {
@@ -132,7 +124,7 @@ bot.on('contact', async (ctx) => {
   const session = sessionForUser(senderId);
 
   if (!session) {
-    await ctx.reply('⌛ Время подтверждения истекло. Вернитесь к заказу и попробуйте снова.', Markup.removeKeyboard());
+    await ctx.reply('⌛ Время подтверждения истекло. Вернитесь на сайт и попробуйте снова.', Markup.removeKeyboard());
     return;
   }
   if (!contact.user_id || contact.user_id !== senderId) {
@@ -142,7 +134,7 @@ bot.on('contact', async (ctx) => {
 
   const phone = normalizePhone(contact.phone_number);
   if (!phone) {
-    await ctx.reply('❌ Не удалось проверить номер. Попробуйте ещё раз.', contactKeyboard());
+    await ctx.reply('❌ Для входа и заказа нужен белорусский номер: +375 и 9 цифр. Поделитесь своим номером кнопкой ниже.', contactKeyboard());
     return;
   }
   if (session.expectedPhone && phone !== session.expectedPhone) {
@@ -167,13 +159,18 @@ bot.on('contact', async (ctx) => {
 
   sessions.delete(senderId);
   await ctx.reply('✅ Номер подтверждён.', Markup.removeKeyboard());
+  const returnUrl = accountReturnUrl(result.returnUrl, process.env.ACCOUNT_SITE_URL || ORDER_URL);
+  if (returnUrl) {
+    await ctx.reply('Вы вошли. Вернитесь на сайт в личный кабинет.',
+      Markup.inlineKeyboard([Markup.button.url('Открыть личный кабинет', returnUrl)]));
+  }
 });
 
 bot.on('text', async (ctx) => {
   if (ctx.message?.text?.startsWith('/')) return;
   const session = sessionForUser(ctx.from.id);
   if (session) return ctx.reply('Подтвердите номер кнопкой ниже.', contactKeyboard());
-  await ctx.reply('Подтвердить номер можно при оформлении заказа на сайте.');
+  await ctx.reply('Войти в личный кабинет или подтвердить заказ можно на сайте.');
 });
 
 bot.catch((error, ctx) => {
